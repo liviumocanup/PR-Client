@@ -1,0 +1,101 @@
+version: '2'
+services:
+  kitchen-server1:
+    container_name: kitchen-docker1
+    build:
+      context: ./kitchen-docker/
+      args:
+        port: 8083
+    environment:
+      - DINING_HALL_SERVICE_URL=http://dining-hall-docker1:8082/dining-hall/distribution
+      - PORT=8083
+    ports:
+      - 8083:8083
+    networks:
+      - spring-cloud-network
+  kitchen-server2:
+    container_name: kitchen-docker2
+    build:
+      context: ./kitchen-docker/
+      args:
+        port: 8085
+    environment:
+      - DINING_HALL_SERVICE_URL=http://dining-hall-docker2:8084/dining-hall/distribution
+      - PORT=8083
+    ports:
+      - 8085:8085
+    networks:
+      - spring-cloud-network
+  dining-hall-server1:
+    depends_on:
+      kitchen-server1:
+        condition: service_started
+      food-ordering-server:
+        condition: service_started
+    container_name: dining-hall-docker1
+    build:
+      context: ./dining-hall-docker/
+      args:
+        port: 8082
+    environment:
+      - KITCHEN_SERVICE_URL=http://kitchen-docker1:8083/kitchen
+      - PORT=8082
+      - FOOD_ORDERING_SERVICE_URL=http://food-ordering-service:8081
+      - RESTAURANT_ADDRESS=http://dining-hall-docker1:8082/dining-hall
+      - RESTAURANT_ID=1
+      - RESTAURANT_NAME=restaurant-1
+    ports:
+      - 8082:8082
+    networks:
+      - spring-cloud-network
+  dining-hall-server2:
+    depends_on:
+      kitchen-server2:
+        condition: service_started
+      food-ordering-server:
+        condition: service_started
+    container_name: dining-hall-docker2
+    build:
+      context: ./dining-hall-docker/
+      args:
+        port: 8084
+    environment:
+      - KITCHEN_SERVICE_URL=http://kitchen-docker2:8085/kitchen
+      - PORT=8082
+      - FOOD_ORDERING_SERVICE_URL=http://food-ordering-service:8081
+      - RESTAURANT_ADDRESS=http://dining-hall-docker2:8084/dining-hall
+      - RESTAURANT_ID=2
+      - RESTAURANT_NAME=restaurant-2
+    ports:
+      - 8084:8084
+    networks:
+      - spring-cloud-network
+  food-ordering-server:
+    container_name: food-ordering-service
+    build:
+      context: ./food-ordering-service/
+      args:
+        port: 8081
+    environment:
+      - PORT=8081
+    ports:
+      - 8081:8081
+    networks:
+      - spring-cloud-network
+  client-service-server:
+    container_name: client-service
+    build:
+      context: ./client-service
+      args:
+        port: 8080
+    environment:
+      - PORT=8080
+      - FOOD_ORDER_SERVICE_URL=http://food-ordering-service:/8081
+    ports:
+      - 8080:8080
+    networks:
+      - spring-cloud-network
+
+networks:
+  spring-cloud-network:
+    driver: bridge
