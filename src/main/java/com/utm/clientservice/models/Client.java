@@ -31,6 +31,8 @@ public class Client {
 
     private ClientOrderResponse clientOrderResponse;
 
+    private final List<ClientSubOrderRatingRequest> subOrderRatingRequests = new ArrayList<>();
+
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
 
     public Client() {
@@ -43,7 +45,7 @@ public class Client {
 
             ClientOrderRequest clientOrderRequest = generateOrder(menu);
             clientOrderResponse = submitOrderToFoodOrderingService(clientOrderRequest);
-            log.info("<----| Order sent : " + clientOrderResponse);
+            log.info("<----| Order sent : " + clientOrderRequest + ", with response: " + clientOrderResponse);
 
             for (ClientSubOrderResponse clientSubOrderResponse : clientOrderResponse.getClientSubOrderResponses()) {
                 String restaurantUrl = menu.getRestaurantsData().stream()
@@ -52,26 +54,63 @@ public class Client {
                         .findAny()
                         .orElseThrow();
 
-                executor.schedule(() -> checkIfSubOrderIsReady(clientSubOrderResponse, restaurantUrl), clientSubOrderResponse.getEstimatedWaitingTime().longValue() * TIME_UNIT + 5, TimeUnit.MILLISECONDS);
+                ClientSubOrderRatingRequest subOrderRatingRequest = new ClientSubOrderRatingRequest();
+                subOrderRatingRequest.setOrderId(clientSubOrderResponse.getOrderId());
+                subOrderRatingRequest.setRestaurantId(clientSubOrderResponse.getRestaurantId());
+                subOrderRatingRequest.setEstimatedWaitingTime(clientSubOrderResponse.getEstimatedWaitingTime());
+                subOrderRatingRequest.setWaitingTime(clientSubOrderResponse.getEstimatedWaitingTime());
+
+                executor.schedule(() -> checkIfSubOrderIsReady(subOrderRatingRequest, restaurantUrl), clientSubOrderResponse.getEstimatedWaitingTime().longValue() * TIME_UNIT + 5, TimeUnit.MILLISECONDS);
             }
         });
     }
 
-    private void checkIfSubOrderIsReady(ClientSubOrderResponse clientSubOrderResponse, String restaurantUrl) {
+    private void checkIfSubOrderIsReady(ClientSubOrderRatingRequest subOrderRatingRequest, String restaurantUrl) {
         //log.info("Order status for suborder " + clientSubOrderResponse);
-        ResponseEntity<ClientOrder> response = restTemplate.getForEntity(restaurantUrl + CHECK_ORDER + clientSubOrderResponse.getOrderId(), ClientOrder.class);
+        ResponseEntity<ClientOrder> response = restTemplate.getForEntity(restaurantUrl + CHECK_ORDER + subOrderRatingRequest.getOrderId(), ClientOrder.class);
 
         ClientOrder clientOrder = response.getBody();
         //log.info("Order status : " + clientOrder);
 
         if (clientOrder.getIsReady()) {
             log.info("|----> Order is ready : " + clientOrder);
-            //request Rating
-            new Client().init();
+            subOrderRatingRequest.setRating(getRatingForSuborder(clientOrder));
+            subOrderRatingRequests.add(subOrderRatingRequest);
+            if (clientOrderResponse.getClientSubOrderResponses().size() == subOrderRatingRequests.size()) {
+                ClientOrderRating orderRating = new ClientOrderRating();
+                orderRating.setClientId(id);
+                orderRating.setOrders(subOrderRatingRequests);
+                orderRating.setOrderId(clientOrderResponse.getId());
+                restTemplate.postForEntity(ClientService.FOOD_ORDER_SERVICE_URL + RATING, orderRating, Void.class);
+                new Client().init();
+            }
         } else {
-            clientSubOrderResponse.setEstimatedWaitingTime(clientSubOrderResponse.getEstimatedWaitingTime() + clientOrder.getEstimatedWaitingTime());
-            executor.schedule(() -> checkIfSubOrderIsReady(clientSubOrderResponse, restaurantUrl), clientOrder.getEstimatedWaitingTime().longValue() * TIME_UNIT + 5, TimeUnit.MILLISECONDS);
+            subOrderRatingRequest.setEstimatedWaitingTime(subOrderRatingRequest.getEstimatedWaitingTime() + clientOrder.getEstimatedWaitingTime());
+            executor.schedule(() -> checkIfSubOrderIsReady(subOrderRatingRequest, restaurantUrl), clientOrder.getEstimatedWaitingTime().longValue() * TIME_UNIT + 5, TimeUnit.MILLISECONDS);
         }
+    }
+
+    public Integer getRatingForSuborder(ClientOrder clientOrder) {
+        long prepTime = clientOrder.getPreparedTime() - clientOrder.getCreatedTime();
+        double maxWaitTime = clientOrder.getMaximumWaitTime() * TIME_UNIT;
+        int rating;
+
+        if (prepTime < maxWaitTime) {
+            rating = 5;
+        } else if (prepTime < maxWaitTime * 1.1) {
+            rating = 4;
+        } else if (prepTime < maxWaitTime * 1.2) {
+            rating = 3;
+        } else if (prepTime < maxWaitTime * 1.3) {
+            rating = 2;
+        } else if (prepTime < maxWaitTime * 1.4) {
+            rating = 1;
+        } else {
+            rating = 0;
+        }
+
+        log.info("ID: " + clientOrder.getOrderId() + " has rating: " + rating + ", with maxWaitTime: " + maxWaitTime + ", and preparationTime: " + prepTime);
+        return rating;
     }
 
     private ClientOrderResponse submitOrderToFoodOrderingService(ClientOrderRequest clientOrderRequest) {
@@ -100,7 +139,18 @@ public class Client {
             Restaurant restaurant = restaurantList.get(randomRestaurantIndex);
             restaurantList.remove(restaurant);
 
-            int numberOfItems = random.nextInt(2) + 1;
+            int numberOfItems = random.nextInt(5) + 1;
+
+            int priority;
+            if (numberOfItems < 2)
+                priority = 5;
+            else if (numberOfItems < 3)
+                priority = 4;
+            else if (numberOfItems < 4)
+                priority = 3;
+            else if (numberOfItems < 5)
+                priority = 2;
+            else priority = 1;
 
             long maxPrepTime = -1;
 
@@ -114,6 +164,7 @@ public class Client {
             clientSubOrderRequest.setPriority(0);
             clientSubOrderRequest.setMaximumWaitTime(maxPrepTime * 1.8);
             clientSubOrderRequest.setRestaurantId(restaurant.getRestaurantId());
+            clientSubOrderRequest.setPriority(priority);
         }
         clientOrderRequest.setClientSubOrderRequests(clientSubOrderRequests);
         clientOrderRequest.setClientId(id);
